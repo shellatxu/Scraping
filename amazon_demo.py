@@ -1,10 +1,12 @@
-import re,time,sys
+import re,time,sys,json,os
+from pathlib import Path
 import requests
 import ssl
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 from urllib3.util.ssl_ import create_urllib3_context
+import urllib.parse
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -100,6 +102,17 @@ def get_form_inputs(form):
                
     return data
 
+def wait_input_captcha(driver, xpath):
+    
+    if_captcha = driver.find_elements(By.XPATH, xpath)
+    if if_captcha :
+        wait_input_captcha = input('Please input captha code, Press Y to coninue \n')
+        if wait_input_captcha.lower() == 'y':
+            pass
+        else:
+            print('Scraping stopped')
+            sys.exit()    
+
 def login(email, password):
     options = webdriver.ChromeOptions()
     options.add_argument("--no-sandbox")
@@ -113,42 +126,36 @@ def login(email, password):
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
     options.add_argument('–log-level=3')
-    options.add_argument("--headless")
+    #options.add_argument("--headless")
     driver = webdriver.Chrome(options=options)
     driver.maximize_window()    
     driver.execute_script("window.scrollTo(0,document.body.scrollHeight);")
     login_url = 'https://www.amazon.co.uk/ap/signin?openid.pape.max_auth_age=900&openid.return_to=https%3A%2F%2Fwww.amazon.co.uk%2Fgp%2Fyourstore%2Fhome%3Fpath%3D%252Fgp%252Fyourstore%252Fhome%26signIn%3D1%26useRedirectOnSuccess%3D1%26action%3Dsign-out%26ref_%3Dnav_AccountFlyout_signout&openid.assoc_handle=gbflex&openid.mode=checkid_setup&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0'
     driver.get(login_url)
     #print(html)    
+    wait_input_captcha(driver, '//*[@id="captchacharacters"]')
     
-
     driver.find_elements(By.XPATH,'//*[@id="ap_email"]')[0].send_keys(email)
     driver.find_elements(By.XPATH,'//*[@id="ap_email"]')[0].send_keys(Keys.ENTER)
     time.sleep(3)
     driver.find_elements(By.XPATH,'//*[@id="ap_password"]')[0].send_keys(password)
     driver.find_elements(By.XPATH,'//*[@id="authportal-main-section"]/div[2]/div/div[2]/div/form/div/div[2]/div/div/label/div/label/input')[0].click()
+    
+    wait_input_captcha(driver, '//*[@id="auth-captcha-guess"]')
+
     driver.find_elements(By.XPATH,'//*[@id="ap_password"]')[0].send_keys(Keys.ENTER)
-    driver.execute_script("""
-    var theCookies = document.cookie.split(';');
-    var aString = '';
-    for (var i = 1 ; i <= theCookies.length; i++) {
-        aString += theCookies[i-1]+',';
-    }
-    var div = document.createElement('div');
-    div.innerHTML = aString;
-    div.setAttribute('id', 'show_amz_cookie');
-    document.body.appendChild(div);
-    """)  
+    
+    wait_input_captcha(driver, '//*[@id="cvf-page-content"]/div/div/div/form/div[2]/input')
+    
     time.sleep(1)
-    cookie = driver.find_elements(By.XPATH, '//*[@id="show_amz_cookie"]')[0].text
-    cookie_array = cookie.split(',')
+    all_cookies = driver.get_cookies()
+
     cookie_kv = {}
-    for ck in cookie_array:
-        ck = ck.strip()
-        item = ck.split('=')
-        if ck !='' :
-            cookie_kv[item[0]] = item[1]
+    for cookie in all_cookies:
+        cookie_kv[cookie['name']] = cookie['value']
     driver.close()
+    print(cookie_kv)
+    Path("cookies.json").write_text(json.dumps(cookie_kv))
     return cookie_kv
 
 
@@ -180,9 +187,15 @@ if __name__ == "__main__":
         lines = accounts.read().split('\n')
         account = lines[0].split(":")
         [email, password] = account
-    print('read email:', email)   
-    cookies = login(email, password)
-    cookies = requests.utils.cookiejar_from_dict(cookies)  # turn dict to cookiejar
+    print('Read email:', email)   
+    
+    cookie_filename = "cookies.json"
+    if os.path.exists(cookie_filename) is True :
+        cookies = json.loads(Path(cookie_filename).read_text())
+    else :
+        cookies = login(email, password)  
+    
+    cookies = requests.utils.cookiejar_from_dict(cookies)
     session.cookies.update(cookies)
 
     # start search page
@@ -196,17 +209,22 @@ if __name__ == "__main__":
         print('current cart number : ',cart_item_count)
     else:
         print("not login")
+        os.remove(cookie_filename)
         sys.exit()
+
+        
     # find product list items
     search_items = re.findall('<a class="a-link-normal s-no-outline" href="([^\"]*)">', html.decode('utf-8'))
     search_items_array = []
     if search_items:
         # just get the first product
-        target_item_url = site_home_url+search_items[1]
+        target_item_url = site_home_url+search_items[1].replace('&amp;','&')
+
         res =  session.get(target_item_url, headers=headers,)
         html = res.text.encode('utf-8')
         soup = BeautifulSoup(html, "html.parser")
-        
+        output_file = open('search.txt', "w" ,encoding='utf-8')
+        output_file.write(html.decode('utf-8'))
         # get the add to cart form
         all_forms = soup.find_all("form")
 
@@ -225,5 +243,36 @@ if __name__ == "__main__":
         cart_item_count = re.findall('<span id="nav-cart-count" aria-hidden="true" class="nav-cart-count nav-cart-1 nav-progressive-attribute nav-progressive-content">([\d]*)</span>', html.decode('utf-8'))
         print('new cart number : ',cart_item_count)
     
-        
-        
+    time.sleep(2)
+    # got cart
+    cart_url = 'https://www.amazon.co.uk/gp/cart/view.html?ref_=nav_cart'
+    res =  session.get(cart_url, headers=headers,)
+    html = res.text.encode('utf-8')
+    soup = BeautifulSoup(html, "html.parser")   
+    output_file = open('cart.html', "w" ,encoding='utf-8')
+    output_file.write(html.decode('utf-8'))    
+    # get the go to checkout form
+    all_forms = soup.find_all("form")
+    for form in all_forms:
+        if 'go-to-checkout' in form['action']: 
+            form_goto_checkout = get_form_details(all_forms[1])
+
+    checkout_url = site_home_url+form_goto_checkout['action']
+    
+    # get form inputs
+    data = get_form_inputs(form_goto_checkout)
+
+    checkout_url = checkout_url+'?'+urllib.parse.urlencode(data)
+
+    time.sleep(2)
+    res = session.get(checkout_url, headers=headers,)
+    html = res.text.encode('utf-8')
+    soup = BeautifulSoup(html, "html.parser")   
+    output_file = open('checkout.html', "w" ,encoding='utf-8')
+    output_file.write(html.decode('utf-8'))
+    
+    address_name = re.findall('<li class="displayAddressLI displayAddressFullName">([^<]*)</li>', html.decode('utf-8'))
+    print('Address name : ',address_name)
+    order_amount = re.findall('<td class="a-color-price a-size-medium a-text-right grand-total-price aok-nowrap a-text-bold a-nowrap">([^<]*)</td>', html.decode('utf-8'))
+    print('Order amount : ',order_amount[0].strip())
+    
