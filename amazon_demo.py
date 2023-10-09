@@ -60,7 +60,7 @@ def get_form_details(form):
             # if the default is not set, and there are options, take the first option as default
             select_default_value = select_options[0]
         # add the select to the inputs list
-        inputs.append({"type": select_type, "name": select_name, "values": select_options, "value": select_default_value})
+        # inputs.append({"type": select_type, "name": select_name, "values": select_options, "value": select_default_value})
     for textarea in form.find_all("textarea"):
         # get the name attribute
         textarea_name = textarea.attrs.get("name")
@@ -271,8 +271,21 @@ if __name__ == "__main__":
     output_file = open('checkout.html', "w" ,encoding='utf-8')
     output_file.write(html.decode('utf-8'))
     
+    #if Prime
+    if_prime = re.findall('<span class="a-button-inner"><a href="([^<]*)" class="a-button-text">', html.decode('utf-8'))
+    if if_prime:
+        prime_url = site_home_url+if_prime[0].replace('&amp;','&')
+        #print(prime_url)
+        res = session.get(prime_url, headers=headers,)
+        html = res.text.encode('utf-8')
+        soup = BeautifulSoup(html, "html.parser") 
+        output_file = open('checkout1.html', "w" ,encoding='utf-8')
+        output_file.write(html.decode('utf-8'))             
+    
     address_name = re.findall('<li class="displayAddressLI displayAddressFullName">([^<]*)</li>', html.decode('utf-8'))
     print('Address name : ',address_name)
     order_amount = re.findall('<td class="a-color-price a-size-medium a-text-right grand-total-price aok-nowrap a-text-bold a-nowrap">([^<]*)</td>', html.decode('utf-8'))
     print('Order amount : ',order_amount[0].strip())
     
+    
+        
